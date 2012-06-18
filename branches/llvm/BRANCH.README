@@ -1,0 +1,2 @@
+This branch of will add support for using llvm bitcode (compiled by clang, linked by llvm-link) along side native libraries (DLL, SO, DYNLIB) and QVM. QVM will most likely be removed after LLVM is working and merged into trunk.
+
