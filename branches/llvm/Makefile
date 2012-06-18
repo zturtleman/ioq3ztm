@@ -44,6 +44,9 @@ endif
 ifndef BUILD_GAME_QVM
   BUILD_GAME_QVM   =
 endif
+ifndef BUILD_GAME_LLVM
+  BUILD_GAME_LLVM  =
+endif
 ifndef BUILD_BASEGAME
   BUILD_BASEGAME =
 endif
@@ -54,8 +57,24 @@ ifndef BUILD_FINAL
   BUILD_FINAL      =0
 endif
 
+# Default to supporting both .qvm and llvm.bc
+ifndef USE_QVM
+  USE_QVM=1
+endif
+ifndef USE_LLVM
+  USE_LLVM=1
+endif
+
 ifneq ($(PLATFORM),darwin)
   BUILD_CLIENT_SMP = 0
+endif
+
+ifneq ($(USE_QVM),1)
+   BUILD_GAME_QVM = 0
+endif
+
+ifneq ($(USE_LLVM),1)
+   BUILD_GAME_LLVM = 0
 endif
 
 #############################################################################
@@ -205,6 +224,10 @@ ifndef USE_INTERNAL_FREETYPE
 USE_INTERNAL_FREETYPE=1
 endif
 
+ifndef USE_INTERNAL_LLVM
+USE_INTERNAL_LLVM=1
+endif
+
 ifndef USE_LOCAL_HEADERS
 USE_LOCAL_HEADERS=1
 endif
@@ -247,6 +270,8 @@ LBURGDIR=$(MOUNT_DIR)/tools/lcc/lburg
 Q3CPPDIR=$(MOUNT_DIR)/tools/lcc/cpp
 Q3LCCETCDIR=$(MOUNT_DIR)/tools/lcc/etc
 Q3LCCSRCDIR=$(MOUNT_DIR)/tools/lcc/src
+CLANGDIR=$(MOUNT_DIR)/tools/clang
+LLVMDIR=$(MOUNT_DIR)/tools/llvm
 LOKISETUPDIR=misc/setup
 NSISDIR=misc/nsis
 SDLHDIR=$(MOUNT_DIR)/SDL12
@@ -274,6 +299,20 @@ ifneq ($(BUILD_CLIENT),0)
     ifneq ($(call bin_path, sdl-config),)
       SDL_CFLAGS=$(shell sdl-config --cflags)
       SDL_LIBS=$(shell sdl-config --libs)
+    endif
+  endif
+endif
+
+ifeq ($(USE_INTERNAL_LLVM),1)
+  LLVM_CXXFLAGS=-D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS
+  LLVM_LIBS=
+else
+  ifneq ($(call bin_path, llvm-config),)
+    ifeq ($(LLVM_CXXFLAGS),)
+      LLVM_CXXFLAGS=$(shell llvm-config --cxxflags)
+    endif
+    ifeq ($(LLVM_LIBS),)
+      LLVM_LIBS=$(shell llvm-config --libs)
     endif
   endif
 endif
@@ -311,6 +350,12 @@ LIB=lib
 
 INSTALL=install
 MKDIR=mkdir
+
+ifeq ($(USE_LLVM),1)
+  LD=$(CXX)
+else
+  LD=$(CC)
+endif
 
 ifneq (,$(findstring "$(PLATFORM)", "linux" "gnu_kfreebsd" "kfreebsd-gnu"))
 
@@ -377,7 +422,11 @@ ifneq (,$(findstring "$(PLATFORM)", "linux" "gnu_kfreebsd" "kfreebsd-gnu"))
   SHLIBLDFLAGS=-shared $(LDFLAGS)
 
   THREAD_LIBS=-lpthread
-  LIBS=-ldl -lm
+  ifeq ($(USE_LLVM),1)
+    LIBS=$(LLVM_LIBS) $(THREAD_LIBS) -ldl -lm
+  else
+    LIBS=-ldl -lm
+  endif
 
   CLIENT_LIBS=$(SDL_LIBS)
   RENDERER_LIBS = $(SDL_LIBS) -lGL
@@ -510,6 +559,9 @@ ifeq ($(PLATFORM),mingw32)
   # so explicitly use gcc instead (which is the only option anyway)
   ifeq ($(call bin_path, $(CC)),)
     CC=gcc
+  endif
+  ifeq ($(call bin_path, $(CXX)),)
+    CXX=g++
   endif
 
   ifndef WINDRES
@@ -944,6 +996,35 @@ ifneq ($(BUILD_GAME_QVM),0)
   endif
 endif
 
+ifneq ($(BUILD_GAME_LLVM),0)
+  ifneq ($(CROSS_COMPILING),1)
+    ifneq ($(BUILD_BASEGAME),0)
+      TARGETS += \
+      $(B)/$(BASEGAME)/cgamellvm.bc \
+      $(B)/$(BASEGAME)/qagamellvm.bc \
+      $(B)/$(BASEGAME)/uillvm.bc
+    endif
+    ifneq ($(BUILD_MISSIONPACK),0)
+      TARGETS += \
+      $(B)/$(MISSIONPACK)/cgamellvm.bc \
+      $(B)/$(MISSIONPACK)/qagamellvm.bc \
+      $(B)/$(MISSIONPACK)/uillvm.bc
+    endif
+  endif
+endif
+
+ifneq ($(USE_QVM),1)
+  HAVE_VM_COMPILED = false
+endif
+
+ifneq ($(HAVE_VM_COMPILED),true)
+  BASE_CFLAGS += -DNO_VM_COMPILED
+endif
+
+ifeq ($(USE_LLVM),1)
+  BASE_CFLAGS += -DUSE_LLVM
+endif
+
 ifeq ($(USE_OPENAL),1)
   CLIENT_CFLAGS += -DUSE_OPENAL
   ifeq ($(USE_OPENAL_DLOPEN),1)
@@ -1003,6 +1084,13 @@ else
 endif
 endif
 
+ifeq ($(USE_LLVM),1)
+ifeq ($(USE_INTERNAL_LLVM),1)
+  #LIBS += -lLLVMsomethings
+  BASE_CFLAGS += -Icode/tools/llvm/include
+endif
+endif
+
 ifeq ("$(CC)", $(findstring "$(CC)", "clang" "clang++"))
   BASE_CFLAGS += -Qunused-arguments
 endif
@@ -1046,6 +1134,11 @@ endif
 define DO_CC
 $(echo_cmd) "CC $<"
 $(Q)$(CC) $(NOTSHLIBCFLAGS) $(CFLAGS) $(CLIENT_CFLAGS) $(OPTIMIZE) -o $@ -c $<
+endef
+
+define DO_CXX
+$(echo_cmd) "CXX $<"
+$(Q)$(CXX) $(NOTSHLIBCFLAGS) $(CFLAGS) $(CLIENT_CFLAGS) $(OPTIMIZE) $(LLVM_CXXFLAGS) -o $@ -c $<
 endef
 
 define DO_REF_CC
@@ -1125,6 +1218,11 @@ $(echo_cmd) "DED_CC $<"
 $(Q)$(CC) $(NOTSHLIBCFLAGS) -DDEDICATED $(CFLAGS) $(SERVER_CFLAGS) $(OPTIMIZE) -o $@ -c $<
 endef
 
+define DO_DED_CXX
+$(echo_cmd) "DED_CXX $<"
+$(Q)$(CXX) $(NOTSHLIBCFLAGS) -DDEDICATED $(CFLAGS) $(SERVER_CFLAGS) $(OPTIMIZE) $(LLVM_CXXFLAGS) -o $@ -c $<
+endef
+
 define DO_WINDRES
 $(echo_cmd) "WINDRES $<"
 $(Q)$(WINDRES) -i $< -o $@
@@ -1160,6 +1258,8 @@ targets: makedirs
 	@echo "  COMPILE_PLATFORM: $(COMPILE_PLATFORM)"
 	@echo "  COMPILE_ARCH: $(COMPILE_ARCH)"
 	@echo "  CC: $(CC)"
+	@echo "  CXX: $(CXX)"
+	@echo "  LD: $(LD)"
 	@echo ""
 	@echo "  CFLAGS:"
 	-@for i in $(CFLAGS); \
@@ -1231,11 +1331,19 @@ makedirs:
 	@if [ ! -d $(B)/$(MISSIONPACK)/qcommon ];then $(MKDIR) $(B)/$(MISSIONPACK)/qcommon;fi
 	@if [ ! -d $(B)/$(MISSIONPACK)/vm ];then $(MKDIR) $(B)/$(MISSIONPACK)/vm;fi
 	@if [ ! -d $(B)/tools ];then $(MKDIR) $(B)/tools;fi
+ifeq ($(USE_QVM),1)
 	@if [ ! -d $(B)/tools/asm ];then $(MKDIR) $(B)/tools/asm;fi
 	@if [ ! -d $(B)/tools/etc ];then $(MKDIR) $(B)/tools/etc;fi
 	@if [ ! -d $(B)/tools/rcc ];then $(MKDIR) $(B)/tools/rcc;fi
 	@if [ ! -d $(B)/tools/cpp ];then $(MKDIR) $(B)/tools/cpp;fi
 	@if [ ! -d $(B)/tools/lburg ];then $(MKDIR) $(B)/tools/lburg;fi
+endif
+ifeq ($(USE_LLVM),1)
+	@if [ ! -d $(B)/tools/llvmclang ];then $(MKDIR) $(B)/tools/llvmclang;fi
+	@if [ ! -d $(B)/tools/llvmlinker ];then $(MKDIR) $(B)/tools/llvmlinker;fi
+	@if [ ! -d $(B)/tools/llvmlibs ];then $(MKDIR) $(B)/tools/llvmlibs;fi
+endif
+
 
 #############################################################################
 # QVM BUILD TOOLS
@@ -1408,6 +1516,671 @@ $(Q3ASM): $(Q3ASMOBJ)
 	$(echo_cmd) "LD $@"
 	$(Q)$(CC) $(TOOLS_CFLAGS) $(TOOLS_LDFLAGS) -o $@ $^ $(TOOLS_LIBS)
 
+#############################################################################
+# LLVM BUILD TOOLS
+#############################################################################
+
+LLVM_TOOLS_CFLAGS=-I$(LLVMDIR)/include -I$(CLANGDIR)/include -D_GNU_SOURCE -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS
+
+define DO_LLVM_TOOLS_CXX
+$(echo_cmd) "LLVM_TOOLS_CXX $<"
+$(Q)$(CXX) $(LLVM_TOOLS_CFLAGS) -o $@ -c $<
+endef
+
+define DO_LLVM_TOOLS_CC
+$(echo_cmd) "LLVM_TOOLS_CC $<"
+$(Q)$(CC) $(LLVM_TOOLS_CFLAGS) -o $@ -c $<
+endef
+
+CLANG=$(B)/tools/clang$(BINEXT)
+LLVMLINK=$(B)/tools/llvm-link$(BINEXT)
+LLVMCC:=$(CLANG)
+LLVMCCFLAGS:= -emit-llvm -c -O3
+LLVMLD:=$(LLVMLINK)
+LLVMLDFLAGS:=
+
+LLVMLINKOBJ_= \
+	$(B)/tools/llvmlibs/Archive.o \
+	$(B)/tools/llvmlibs/ArchiveReader.o \
+	$(B)/tools/llvmlibs/ArchiveWriter.o \
+	\
+	$(B)/tools/llvmlibs/LLLexer.o \
+	$(B)/tools/llvmlibs/LLParser.o \
+	$(B)/tools/llvmlibs/Parser.o \
+	\
+	$(B)/tools/llvmlibs/BitcodeReader.o \
+	$(B)/tools/llvmlibs/BitReader.o \
+	\
+	$(B)/tools/llvmlibs/BitcodeWriter.o \
+	$(B)/tools/llvmlibs/BitcodeWriterPass.o \
+	$(B)/tools/llvmlibs/BitWriter.o \
+	$(B)/tools/llvmlibs/ValueEnumerator.o \
+	\
+	$(B)/tools/llvmlibs/LinkArchives.o \
+	$(B)/tools/llvmlibs/Linker.o \
+	$(B)/tools/llvmlibs/LinkItems.o \
+	$(B)/tools/llvmlibs/LinkModules.o \
+	\
+	$(B)/tools/llvmlibs/Allocator.o \
+	$(B)/tools/llvmlibs/APFloat.o \
+	$(B)/tools/llvmlibs/APInt.o \
+	$(B)/tools/llvmlibs/APSInt.o \
+	$(B)/tools/llvmlibs/Atomic.o \
+	$(B)/tools/llvmlibs/circular_raw_ostream.o \
+	$(B)/tools/llvmlibs/CommandLine.o \
+	$(B)/tools/llvmlibs/ConstantRange.o \
+	$(B)/tools/llvmlibs/CrashRecoveryContext.o \
+	$(B)/tools/llvmlibs/DAGDeltaAlgorithm.o \
+	$(B)/tools/llvmlibs/Debug.o \
+	$(B)/tools/llvmlibs/DeltaAlgorithm.o \
+	$(B)/tools/llvmlibs/Disassembler.o \
+	$(B)/tools/llvmlibs/Dwarf.o \
+	$(B)/tools/llvmlibs/DynamicLibrary.o \
+	$(B)/tools/llvmlibs/Errno.o \
+	$(B)/tools/llvmlibs/ErrorHandling.o \
+	$(B)/tools/llvmlibs/FileUtilities.o \
+	$(B)/tools/llvmlibs/FoldingSet.o \
+	$(B)/tools/llvmlibs/FormattedStream.o \
+	$(B)/tools/llvmlibs/GraphWriter.o \
+	$(B)/tools/llvmlibs/Host.o \
+	$(B)/tools/llvmlibs/IncludeFile.o \
+	$(B)/tools/llvmlibs/IntEqClasses.o \
+	$(B)/tools/llvmlibs/IntervalMap.o \
+	$(B)/tools/llvmlibs/IsInf.o \
+	$(B)/tools/llvmlibs/IsNAN.o \
+	$(B)/tools/llvmlibs/ManagedStatic.o \
+	$(B)/tools/llvmlibs/Memory.o \
+	$(B)/tools/llvmlibs/MemoryBuffer.o \
+	$(B)/tools/llvmlibs/MemoryObject.o \
+	$(B)/tools/llvmlibs/Mutex.o \
+	$(B)/tools/llvmlibs/Path.o \
+	$(B)/tools/llvmlibs/PathV2.o \
+	$(B)/tools/llvmlibs/PluginLoader.o \
+	$(B)/tools/llvmlibs/PrettyStackTrace.o \
+	$(B)/tools/llvmlibs/Process.o \
+	$(B)/tools/llvmlibs/Program.o \
+	$(B)/tools/llvmlibs/raw_os_ostream.o \
+	$(B)/tools/llvmlibs/raw_ostream.o \
+	$(B)/tools/llvmlibs/regcomp.o \
+	$(B)/tools/llvmlibs/regerror.o \
+	$(B)/tools/llvmlibs/regexec.o \
+	$(B)/tools/llvmlibs/regfree.o \
+	$(B)/tools/llvmlibs/regstrlcpy.o \
+	$(B)/tools/llvmlibs/Regex.o \
+	$(B)/tools/llvmlibs/RWMutex.o \
+	$(B)/tools/llvmlibs/SearchForAddressOfSpecialSymbol.o \
+	$(B)/tools/llvmlibs/Signals.o \
+	$(B)/tools/llvmlibs/SmallPtrSet.o \
+	$(B)/tools/llvmlibs/SmallVector.o \
+	$(B)/tools/llvmlibs/SourceMgr.o \
+	$(B)/tools/llvmlibs/Statistic.o \
+	$(B)/tools/llvmlibs/StringExtras.o \
+	$(B)/tools/llvmlibs/StringMap.o \
+	$(B)/tools/llvmlibs/StringPool.o \
+	$(B)/tools/llvmlibs/StringRef.o \
+	$(B)/tools/llvmlibs/system_error.o \
+	$(B)/tools/llvmlibs/SystemUtils.o \
+	$(B)/tools/llvmlibs/TargetRegistry.o \
+	$(B)/tools/llvmlibs/Threading.o \
+	$(B)/tools/llvmlibs/ThreadLocal.o \
+	$(B)/tools/llvmlibs/Timer.o \
+	$(B)/tools/llvmlibs/TimeValue.o \
+	$(B)/tools/llvmlibs/ToolOutputFile.o \
+	$(B)/tools/llvmlibs/Triple.o \
+	$(B)/tools/llvmlibs/Twine.o \
+	$(B)/tools/llvmlibs/Valgrind.o \
+	\
+	$(B)/tools/llvmlibs/ValueMapper.o \
+	\
+	$(B)/tools/llvmlibs/AsmWriter.o \
+	$(B)/tools/llvmlibs/Attributes.o \
+	$(B)/tools/llvmlibs/AutoUpgrade.o \
+	$(B)/tools/llvmlibs/BasicBlock.o \
+	$(B)/tools/llvmlibs/ConstantFold.o \
+	$(B)/tools/llvmlibs/Constants.o \
+	$(B)/tools/llvmlibs/Core.o \
+	$(B)/tools/llvmlibs/DebugLoc.o \
+	$(B)/tools/llvmlibs/Dominators.o \
+	$(B)/tools/llvmlibs/Function.o \
+	$(B)/tools/llvmlibs/Globals.o \
+	$(B)/tools/llvmlibs/GVMaterializer.o \
+	$(B)/tools/llvmlibs/InlineAsm.o \
+	$(B)/tools/llvmlibs/Instruction.o \
+	$(B)/tools/llvmlibs/Instructions.o \
+	$(B)/tools/llvmlibs/IntrinsicInst.o \
+	$(B)/tools/llvmlibs/IRBuilder.o \
+	$(B)/tools/llvmlibs/LeakDetector.o \
+	$(B)/tools/llvmlibs/LLVMContext.o \
+	$(B)/tools/llvmlibs/LLVMContextImpl.o \
+	$(B)/tools/llvmlibs/Metadata.o \
+	$(B)/tools/llvmlibs/Module.o \
+	$(B)/tools/llvmlibs/Pass.o \
+	$(B)/tools/llvmlibs/PassManager.o \
+	$(B)/tools/llvmlibs/PassRegistry.o \
+	$(B)/tools/llvmlibs/PrintModulePass.o \
+	$(B)/tools/llvmlibs/Type.o \
+	$(B)/tools/llvmlibs/TypeSymbolTable.o \
+	$(B)/tools/llvmlibs/Use.o \
+	$(B)/tools/llvmlibs/User.o \
+	$(B)/tools/llvmlibs/Value.o \
+	$(B)/tools/llvmlibs/ValueSymbolTable.o \
+	$(B)/tools/llvmlibs/ValueTypes.o \
+	$(B)/tools/llvmlibs/Verifier.o
+
+LLVMLINKOBJ = $(B)/tools/llvmlinker/llvm-link.o $(LLVMLINKOBJ_)
+LLVMLINK_LDFLAGS=-pthread
+LLVMLINK_LIBS=-ldl
+
+$(B)/tools/llvmlinker/%.o: $(LLVMDIR)/tools/llvm-link/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Archive/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/AsmParser/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Bitcode/Reader/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Bitcode/Writer/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Linker/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Support/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Support/%.c
+	$(DO_LLVM_TOOLS_CC)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Target/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/Transforms/Utils/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmlibs/%.o: $(LLVMDIR)/lib/VMCore/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(LLVMLINK): $(LLVMLINKOBJ)
+	$(echo_cmd) "LD $@"
+	$(Q)$(CXX) $(LLVMLINK_CFLAGS) $(LLVMLINK_LDFLAGS) -o $@ $^ $(LLVMLINK_LIBS)
+
+llvmlink: $(LLVMLINK)
+
+CLANGLLVMLIBOBJS= \
+	$(B)/tools/llvmlibs/Mangler.o \
+	$(B)/tools/llvmlibs/SubtargetFeature.o \
+	$(B)/tools/llvmlibs/Target.o \
+	$(B)/tools/llvmlibs/TargetAsmInfo.o \
+	$(B)/tools/llvmlibs/TargetAsmLexer.o \
+	$(B)/tools/llvmlibs/TargetData.o \
+	$(B)/tools/llvmlibs/TargetELFWriterInfo.o \
+	$(B)/tools/llvmlibs/TargetFrameLowering.o \
+	$(B)/tools/llvmlibs/TargetInstrInfo.o \
+	$(B)/tools/llvmlibs/TargetIntrinsicInfo.o \
+	$(B)/tools/llvmlibs/TargetLibraryInfo.o \
+	$(B)/tools/llvmlibs/TargetLoweringObjectFile.o \
+	$(B)/tools/llvmlibs/TargetMachine.o \
+	$(B)/tools/llvmlibs/TargetRegisterInfo.o \
+	$(B)/tools/llvmlibs/TargetSubtarget.o
+
+CLANGOBJ_= \
+	$(B)/tools/llvmclang/cc1as_main.o \
+	$(B)/tools/llvmclang/cc1_main.o \
+	$(B)/tools/llvmclang/driver.o \
+	\
+	$(B)/tools/llvmclang/AnalysisContext.o \
+	$(B)/tools/llvmclang/CFG.o \
+	$(B)/tools/llvmclang/CFGReachabilityAnalysis.o \
+	$(B)/tools/llvmclang/CFGStmtMap.o \
+	$(B)/tools/llvmclang/CocoaConventions.o \
+	$(B)/tools/llvmclang/FormatString.o \
+	$(B)/tools/llvmclang/LiveVariables.o \
+	$(B)/tools/llvmclang/PrintfFormatString.o \
+	$(B)/tools/llvmclang/PseudoConstantAnalysis.o \
+	$(B)/tools/llvmclang/ReachableCode.o \
+	$(B)/tools/llvmclang/ScanfFormatString.o \
+	$(B)/tools/llvmclang/UninitializedValues.o \
+	$(B)/tools/llvmclang/UninitializedValuesV2.o \
+	\
+	$(B)/tools/llvmclang/APValue.o \
+	$(B)/tools/llvmclang/ASTConsumer.o \
+	$(B)/tools/llvmclang/ASTContext.o \
+	$(B)/tools/llvmclang/ASTDiagnostic.o \
+	$(B)/tools/llvmclang/ASTImporter.o \
+	$(B)/tools/llvmclang/AttrImpl.o \
+	$(B)/tools/llvmclang/CXXInheritance.o \
+	$(B)/tools/llvmclang/Decl.o \
+	$(B)/tools/llvmclang/DeclarationName.o \
+	$(B)/tools/llvmclang/DeclBase.o \
+	$(B)/tools/llvmclang/DeclCXX.o \
+	$(B)/tools/llvmclang/DeclFriend.o \
+	$(B)/tools/llvmclang/DeclGroup.o \
+	$(B)/tools/llvmclang/DeclObjC.o \
+	$(B)/tools/llvmclang/DeclPrinter.o \
+	$(B)/tools/llvmclang/DeclTemplate.o \
+	$(B)/tools/llvmclang/DumpXML.o \
+	$(B)/tools/llvmclang/Expr.o \
+	$(B)/tools/llvmclang/ExprClassification.o \
+	$(B)/tools/llvmclang/ExprConstant.o \
+	$(B)/tools/llvmclang/ExprCXX.o \
+	$(B)/tools/llvmclang/ExternalASTSource.o \
+	$(B)/tools/llvmclang/InheritViz.o \
+	$(B)/tools/llvmclang/ItaniumCXXABI.o \
+	$(B)/tools/llvmclang/ItaniumMangle.o \
+	$(B)/tools/llvmclang/Mangle.o \
+	$(B)/tools/llvmclang/MicrosoftCXXABI.o \
+	$(B)/tools/llvmclang/MicrosoftMangle.o \
+	$(B)/tools/llvmclang/NestedNameSpecifier.o \
+	$(B)/tools/llvmclang/ParentMap.o \
+	$(B)/tools/llvmclang/RecordLayout.o \
+	$(B)/tools/llvmclang/RecordLayoutBuilder.o \
+	$(B)/tools/llvmclang/Stmt.o \
+	$(B)/tools/llvmclang/StmtDumper.o \
+	$(B)/tools/llvmclang/StmtIterator.o \
+	$(B)/tools/llvmclang/StmtPrinter.o \
+	$(B)/tools/llvmclang/StmtProfile.o \
+	$(B)/tools/llvmclang/StmtViz.o \
+	$(B)/tools/llvmclang/TemplateBase.o \
+	$(B)/tools/llvmclang/TemplateName.o \
+	$(B)/tools/llvmclang/Type.o \
+	$(B)/tools/llvmclang/TypeLoc.o \
+	$(B)/tools/llvmclang/TypePrinter.o \
+	\
+	$(B)/tools/llvmclang/ConvertUTF.o \
+	$(B)/tools/llvmclang/Builtins.o \
+	$(B)/tools/llvmclang/Diagnostic.o \
+	$(B)/tools/llvmclang/DiagnosticIDs.o \
+	$(B)/tools/llvmclang/FileManager.o \
+	$(B)/tools/llvmclang/FileSystemStatCache.o \
+	$(B)/tools/llvmclang/IdentifierTable.o \
+	$(B)/tools/llvmclang/SourceLocation.o \
+	$(B)/tools/llvmclang/SourceManager.o \
+	$(B)/tools/llvmclang/TargetInfo.o \
+	$(B)/tools/llvmclang/Targets.o \
+	$(B)/tools/llvmclang/TokenKinds.o \
+	$(B)/tools/llvmclang/Version.o \
+	\
+	$(B)/tools/llvmclang/BackendUtil.o \
+	$(B)/tools/llvmclang/CGBlocks.o \
+	$(B)/tools/llvmclang/CGBuiltin.o \
+	$(B)/tools/llvmclang/CGCall.o \
+	$(B)/tools/llvmclang/CGClass.o \
+	$(B)/tools/llvmclang/CGCleanup.o \
+	$(B)/tools/llvmclang/CGCXX.o \
+	$(B)/tools/llvmclang/CGCXXABI.o \
+	$(B)/tools/llvmclang/CGDebugInfo.o \
+	$(B)/tools/llvmclang/CGDecl.o \
+	$(B)/tools/llvmclang/CGDeclCXX.o \
+	$(B)/tools/llvmclang/CGException.o \
+	$(B)/tools/llvmclang/CGExpr.o \
+	$(B)/tools/llvmclang/CGExprAgg.o \
+	$(B)/tools/llvmclang/CGExprComplex.o \
+	$(B)/tools/llvmclang/CGExprConstant.o \
+	$(B)/tools/llvmclang/CGExprCXX.o \
+	$(B)/tools/llvmclang/CGExprScalar.o \
+	$(B)/tools/llvmclang/CGObjC.o \
+	$(B)/tools/llvmclang/CGObjCGNU.o \
+	$(B)/tools/llvmclang/CGObjCMac.o \
+	$(B)/tools/llvmclang/CGRecordLayoutBuilder.o \
+	$(B)/tools/llvmclang/CGRTTI.o \
+	$(B)/tools/llvmclang/CGStmt.o \
+	$(B)/tools/llvmclang/CGTemporaries.o \
+	$(B)/tools/llvmclang/CGVTables.o \
+	$(B)/tools/llvmclang/CGVTT.o \
+	$(B)/tools/llvmclang/CodeGenAction.o \
+	$(B)/tools/llvmclang/CodeGenFunction.o \
+	$(B)/tools/llvmclang/CodeGenModule.o \
+	$(B)/tools/llvmclang/CodeGenTBAA.o \
+	$(B)/tools/llvmclang/CodeGenTypes.o \
+	$(B)/tools/llvmclang/ItaniumCXXABI.o \
+	$(B)/tools/llvmclang/MicrosoftCXXABI.o \
+	$(B)/tools/llvmclang/ModuleBuilder.o \
+	$(B)/tools/llvmclang/TargetInfo.o \
+	\
+	$(B)/tools/llvmclang/Action.o \
+	$(B)/tools/llvmclang/Arg.o \
+	$(B)/tools/llvmclang/ArgList.o \
+	$(B)/tools/llvmclang/CC1AsOptions.o \
+	$(B)/tools/llvmclang/CC1Options.o \
+	$(B)/tools/llvmclang/Compilation.o \
+	$(B)/tools/llvmclang/Driver.o \
+	$(B)/tools/llvmclang/DriverOptions.o \
+	$(B)/tools/llvmclang/HostInfo.o \
+	$(B)/tools/llvmclang/Job.o \
+	$(B)/tools/llvmclang/Option.o \
+	$(B)/tools/llvmclang/OptTable.o \
+	$(B)/tools/llvmclang/Phases.o \
+	$(B)/tools/llvmclang/Tool.o \
+	$(B)/tools/llvmclang/ToolChain.o \
+	$(B)/tools/llvmclang/ToolChains.o \
+	$(B)/tools/llvmclang/Tools.o \
+	$(B)/tools/llvmclang/Types.o \
+	\
+	$(B)/tools/llvmclang/ASTConsumers.o \
+	$(B)/tools/llvmclang/ASTMerge.o \
+	$(B)/tools/llvmclang/ASTUnit.o \
+	$(B)/tools/llvmclang/BoostConAction.o \
+	$(B)/tools/llvmclang/CacheTokens.o \
+	$(B)/tools/llvmclang/CompilerInstance.o \
+	$(B)/tools/llvmclang/CompilerInvocation.o \
+	$(B)/tools/llvmclang/DependencyFile.o \
+	$(B)/tools/llvmclang/DiagChecker.o \
+	$(B)/tools/llvmclang/FrontendAction.o \
+	$(B)/tools/llvmclang/FrontendActions.o \
+	$(B)/tools/llvmclang/FrontendOptions.o \
+	$(B)/tools/llvmclang/HeaderIncludeGen.o \
+	$(B)/tools/llvmclang/InitHeaderSearch.o \
+	$(B)/tools/llvmclang/InitPreprocessor.o \
+	$(B)/tools/llvmclang/LangStandards.o \
+	$(B)/tools/llvmclang/MultiplexConsumer.o \
+	$(B)/tools/llvmclang/PrintPreprocessedOutput.o \
+	$(B)/tools/llvmclang/TextDiagnosticBuffer.o \
+	$(B)/tools/llvmclang/TextDiagnosticPrinter.o \
+	$(B)/tools/llvmclang/VerifyDiagnosticsClient.o \
+	$(B)/tools/llvmclang/Warnings.o \
+	\
+	$(B)/tools/llvmclang/ExecuteCompilerInvocation.o \
+	\
+	$(B)/tools/llvmclang/Analyzer.o \
+	$(B)/tools/llvmclang/ASTLocation.o \
+	$(B)/tools/llvmclang/CallGraph.o \
+	$(B)/tools/llvmclang/DeclReferenceMap.o \
+	$(B)/tools/llvmclang/Entity.o \
+	$(B)/tools/llvmclang/GlobalSelector.o \
+	$(B)/tools/llvmclang/Handlers.o \
+	$(B)/tools/llvmclang/Indexer.o \
+	$(B)/tools/llvmclang/IndexProvider.o \
+	$(B)/tools/llvmclang/Program.o \
+	$(B)/tools/llvmclang/SelectorMap.o \
+	\
+	$(B)/tools/llvmclang/HeaderMap.o \
+	$(B)/tools/llvmclang/HeaderSearch.o \
+	$(B)/tools/llvmclang/Lexer.o \
+	$(B)/tools/llvmclang/LiteralSupport.o \
+	$(B)/tools/llvmclang/MacroArgs.o \
+	$(B)/tools/llvmclang/MacroInfo.o \
+	$(B)/tools/llvmclang/PPCaching.o \
+	$(B)/tools/llvmclang/PPDirectives.o \
+	$(B)/tools/llvmclang/PPExpressions.o \
+	$(B)/tools/llvmclang/PPLexerChange.o \
+	$(B)/tools/llvmclang/PPMacroExpansion.o \
+	$(B)/tools/llvmclang/Pragma.o \
+	$(B)/tools/llvmclang/PreprocessingRecord.o \
+	$(B)/tools/llvmclang/Preprocessor.o \
+	$(B)/tools/llvmclang/PreprocessorLexer.o \
+	$(B)/tools/llvmclang/PTHLexer.o \
+	$(B)/tools/llvmclang/ScratchBuffer.o \
+	$(B)/tools/llvmclang/TokenConcatenation.o \
+	$(B)/tools/llvmclang/TokenLexer.o \
+	\
+	$(B)/tools/llvmclang/ParseAST.o \
+	$(B)/tools/llvmclang/ParseCXXInlineMethods.o \
+	$(B)/tools/llvmclang/ParseDecl.o \
+	$(B)/tools/llvmclang/ParseDeclCXX.o \
+	$(B)/tools/llvmclang/ParseExpr.o \
+	$(B)/tools/llvmclang/ParseExprCXX.o \
+	$(B)/tools/llvmclang/ParseInit.o \
+	$(B)/tools/llvmclang/ParseObjc.o \
+	$(B)/tools/llvmclang/ParsePragma.o \
+	$(B)/tools/llvmclang/Parser.o \
+	$(B)/tools/llvmclang/ParseStmt.o \
+	$(B)/tools/llvmclang/ParseTemplate.o \
+	$(B)/tools/llvmclang/ParseTentative.o \
+	\
+	$(B)/tools/llvmclang/DeltaTree.o \
+	$(B)/tools/llvmclang/FixItRewriter.o \
+	$(B)/tools/llvmclang/FrontendActions.o \
+	$(B)/tools/llvmclang/HTMLPrint.o \
+	$(B)/tools/llvmclang/HTMLRewrite.o \
+	$(B)/tools/llvmclang/RewriteMacros.o \
+	$(B)/tools/llvmclang/RewriteObjC.o \
+	$(B)/tools/llvmclang/Rewriter.o \
+	$(B)/tools/llvmclang/RewriteRope.o \
+	$(B)/tools/llvmclang/RewriteTest.o \
+	$(B)/tools/llvmclang/TokenRewriter.o \
+	\
+	$(B)/tools/llvmclang/AnalysisBasedWarnings.o \
+	$(B)/tools/llvmclang/AttributeList.o \
+	$(B)/tools/llvmclang/CodeCompleteConsumer.o \
+	$(B)/tools/llvmclang/DeclSpec.o \
+	$(B)/tools/llvmclang/IdentifierResolver.o \
+	$(B)/tools/llvmclang/JumpDiagnostics.o \
+	$(B)/tools/llvmclang/Sema.o \
+	$(B)/tools/llvmclang/SemaAccess.o \
+	$(B)/tools/llvmclang/SemaAttr.o \
+	$(B)/tools/llvmclang/SemaChecking.o \
+	$(B)/tools/llvmclang/SemaCodeComplete.o \
+	$(B)/tools/llvmclang/SemaCXXCast.o \
+	$(B)/tools/llvmclang/SemaCXXScopeSpec.o \
+	$(B)/tools/llvmclang/SemaDecl.o \
+	$(B)/tools/llvmclang/SemaDeclAttr.o \
+	$(B)/tools/llvmclang/SemaDeclCXX.o \
+	$(B)/tools/llvmclang/SemaDeclObjC.o \
+	$(B)/tools/llvmclang/SemaExceptionSpec.o \
+	$(B)/tools/llvmclang/SemaExpr.o \
+	$(B)/tools/llvmclang/SemaExprCXX.o \
+	$(B)/tools/llvmclang/SemaExprObjC.o \
+	$(B)/tools/llvmclang/SemaInit.o \
+	$(B)/tools/llvmclang/SemaLookup.o \
+	$(B)/tools/llvmclang/SemaObjCProperty.o \
+	$(B)/tools/llvmclang/SemaOverload.o \
+	$(B)/tools/llvmclang/SemaStmt.o \
+	$(B)/tools/llvmclang/SemaTemplate.o \
+	$(B)/tools/llvmclang/SemaTemplateDeduction.o \
+	$(B)/tools/llvmclang/SemaTemplateInstantiate.o \
+	$(B)/tools/llvmclang/SemaTemplateInstantiateDecl.o \
+	$(B)/tools/llvmclang/SemaTemplateVariadic.o \
+	$(B)/tools/llvmclang/SemaType.o \
+	$(B)/tools/llvmclang/TargetAttributesSema.o \
+	\
+	$(B)/tools/llvmclang/ASTCommon.o \
+	$(B)/tools/llvmclang/ASTReader.o \
+	$(B)/tools/llvmclang/ASTReaderDecl.o \
+	$(B)/tools/llvmclang/ASTReaderStmt.o \
+	$(B)/tools/llvmclang/ASTWriter.o \
+	$(B)/tools/llvmclang/ASTWriterDecl.o \
+	$(B)/tools/llvmclang/ASTWriterStmt.o \
+	$(B)/tools/llvmclang/GeneratePCH.o \
+	\
+	$(B)/tools/llvmclang/AdjustedReturnValueChecker.o \
+	$(B)/tools/llvmclang/AnalyzerStatsChecker.o \
+	$(B)/tools/llvmclang/ArrayBoundChecker.o \
+	$(B)/tools/llvmclang/ArrayBoundCheckerV2.o \
+	$(B)/tools/llvmclang/AttrNonNullChecker.o \
+	$(B)/tools/llvmclang/BasicObjCFoundationChecks.o \
+	$(B)/tools/llvmclang/BuiltinFunctionChecker.o \
+	$(B)/tools/llvmclang/CallAndMessageChecker.o \
+	$(B)/tools/llvmclang/CastSizeChecker.o \
+	$(B)/tools/llvmclang/CastToStructChecker.o \
+	$(B)/tools/llvmclang/CheckObjCDealloc.o \
+	$(B)/tools/llvmclang/CheckObjCInstMethSignature.o \
+	$(B)/tools/llvmclang/CheckSecuritySyntaxOnly.o \
+	$(B)/tools/llvmclang/CheckSizeofPointer.o \
+	$(B)/tools/llvmclang/ChrootChecker.o \
+	$(B)/tools/llvmclang/ClangSACheckerProvider.o \
+	$(B)/tools/llvmclang/CStringChecker.o \
+	$(B)/tools/llvmclang/DeadStoresChecker.o \
+	$(B)/tools/llvmclang/DebugCheckers.o \
+	$(B)/tools/llvmclang/DereferenceChecker.o \
+	$(B)/tools/llvmclang/DivZeroChecker.o \
+	$(B)/tools/llvmclang/FixedAddressChecker.o \
+	$(B)/tools/llvmclang/IdempotentOperationChecker.o \
+	$(B)/tools/llvmclang/LLVMConventionsChecker.o \
+	$(B)/tools/llvmclang/MacOSXAPIChecker.o \
+	$(B)/tools/llvmclang/MallocChecker.o \
+	$(B)/tools/llvmclang/NoReturnFunctionChecker.o \
+	$(B)/tools/llvmclang/NSAutoreleasePoolChecker.o \
+	$(B)/tools/llvmclang/NSErrorChecker.o \
+	$(B)/tools/llvmclang/ObjCAtSyncChecker.o \
+	$(B)/tools/llvmclang/ObjCSelfInitChecker.o \
+	$(B)/tools/llvmclang/ObjCUnusedIVarsChecker.o \
+	$(B)/tools/llvmclang/OSAtomicChecker.o \
+	$(B)/tools/llvmclang/PointerArithChecker.o \
+	$(B)/tools/llvmclang/PointerSubChecker.o \
+	$(B)/tools/llvmclang/PthreadLockChecker.o \
+	$(B)/tools/llvmclang/ReturnPointerRangeChecker.o \
+	$(B)/tools/llvmclang/ReturnUndefChecker.o \
+	$(B)/tools/llvmclang/StackAddrEscapeChecker.o \
+	$(B)/tools/llvmclang/StreamChecker.o \
+	$(B)/tools/llvmclang/UndefBranchChecker.o \
+	$(B)/tools/llvmclang/UndefCapturedBlockVarChecker.o \
+	$(B)/tools/llvmclang/UndefinedArraySubscriptChecker.o \
+	$(B)/tools/llvmclang/UndefinedAssignmentChecker.o \
+	$(B)/tools/llvmclang/UndefResultChecker.o \
+	$(B)/tools/llvmclang/UnixAPIChecker.o \
+	$(B)/tools/llvmclang/UnreachableCodeChecker.o \
+	$(B)/tools/llvmclang/VLASizeChecker.o \
+	\
+	$(B)/tools/llvmclang/AggExprVisitor.o \
+	$(B)/tools/llvmclang/AnalysisManager.o \
+	$(B)/tools/llvmclang/BasicConstraintManager.o \
+	$(B)/tools/llvmclang/BasicStore.o \
+	$(B)/tools/llvmclang/BasicValueFactory.o \
+	$(B)/tools/llvmclang/BlockCounter.o \
+	$(B)/tools/llvmclang/BugReporter.o \
+	$(B)/tools/llvmclang/BugReporterVisitors.o \
+	$(B)/tools/llvmclang/CFRefCount.o \
+	$(B)/tools/llvmclang/CheckerContext.o \
+	$(B)/tools/llvmclang/CheckerHelpers.o \
+	$(B)/tools/llvmclang/CheckerManager.o \
+	$(B)/tools/llvmclang/CoreEngine.o \
+	$(B)/tools/llvmclang/CXXExprEngine.o \
+	$(B)/tools/llvmclang/Environment.o \
+	$(B)/tools/llvmclang/ExplodedGraph.o \
+	$(B)/tools/llvmclang/ExprEngine.o \
+	$(B)/tools/llvmclang/FlatStore.o \
+	$(B)/tools/llvmclang/GRState.o \
+	$(B)/tools/llvmclang/HTMLDiagnostics.o \
+	$(B)/tools/llvmclang/MemRegion.o \
+	$(B)/tools/llvmclang/ObjCMessage.o \
+	$(B)/tools/llvmclang/PathDiagnostic.o \
+	$(B)/tools/llvmclang/PlistDiagnostics.o \
+	$(B)/tools/llvmclang/RangeConstraintManager.o \
+	$(B)/tools/llvmclang/RegionStore.o \
+	$(B)/tools/llvmclang/SimpleConstraintManager.o \
+	$(B)/tools/llvmclang/SimpleSValBuilder.o \
+	$(B)/tools/llvmclang/Store.o \
+	$(B)/tools/llvmclang/SValBuilder.o \
+	$(B)/tools/llvmclang/SVals.o \
+	$(B)/tools/llvmclang/SymbolManager.o \
+	$(B)/tools/llvmclang/TextPathDiagnostics.o \
+	\
+	$(B)/tools/llvmclang/AnalysisConsumer.o \
+	$(B)/tools/llvmclang/CheckerRegistration.o \
+	$(B)/tools/llvmclang/FrontendActions.o \
+
+CLANGOBJ=$(LLVMLINKOBJ_) $(CLANGLLVMLIBOBJS) $(CLANGOBJ_)
+CLANGOBJ_LDFLAGS=-pthread
+CLANGOBJ_LIBS=-ldl
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/tools/driver/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Analysis/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/AST/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Basic/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Basic/%.c
+	$(DO_LLVM_TOOLS_CC)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/CodeGen/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Driver/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Frontend/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/FrontendTool/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Index/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Lex/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Parse/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Rewrite/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Sema/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/Serialization/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/StaticAnalyzer/Checkers/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/StaticAnalyzer/Core/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(B)/tools/llvmclang/%.o: $(CLANGDIR)/lib/StaticAnalyzer/Frontend/%.cpp
+	$(DO_LLVM_TOOLS_CXX)
+
+$(CLANG): $(CLANGOBJ)
+	$(echo_cmd) "LD $@"
+	$(Q)$(CXX) $(CLANG_CFLAGS) $(CLANG_LDFLAGS) -o $@ $^ $(CLANG_LIBS)
+
+ifneq ($(USE_INTERNAL_LLVM),1)
+  CLANG=
+  LLVMLINK=
+  LLVMCC:=clang$(BINEXT)
+  LLVMLD:=llvm-link$(BINEXT)
+endif
+
+define DO_LLVMCC
+$(echo_cmd) "LLVMCC $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -o $@ $<
+endef
+
+define DO_CGAME_LLVMCC
+$(echo_cmd) "CGAME_LLVMCC $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -DCGAME -o $@ $<
+endef
+
+define DO_GAME_LLVMCC
+$(echo_cmd) "GAME_LLVMCC $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -DQAGAME -o $@ $<
+endef
+
+define DO_UI_LLVMCC
+$(echo_cmd) "UI_LLVMCC $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -DUI -o $@ $<
+endef
+
+define DO_LLVMCC_MISSIONPACK
+$(echo_cmd) "LLVMCC_MISSIONPACK $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -DMISSIONPACK -o $@ $<
+endef
+
+define DO_CGAME_LLVMCC_MISSIONPACK
+$(echo_cmd) "CGAME_LLVMCC_MISSIONPACK $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -DMISSIONPACK -DCGAME -o $@ $<
+endef
+
+define DO_GAME_LLVMCC_MISSIONPACK
+$(echo_cmd) "GAME_LLVMCC_MISSIONPACK $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -DMISSIONPACK -DQAGAME -o $@ $<
+endef
+
+define DO_UI_LLVMCC_MISSIONPACK
+$(echo_cmd) "UI_LLVMCC_MISSIONPACK $<"
+$(Q)$(LLVMCC) $(LLVMCCFLAGS) $(CFLAGS) -DMISSIONPACK -DUI -o $@ $<
+endef
 
 #############################################################################
 # CLIENT/SERVER
@@ -1778,6 +2551,10 @@ ifeq ($(HAVE_VM_COMPILED),true)
   endif
 endif
 
+ifeq ($(USE_LLVM),1)
+  Q3OBJ += $(B)/client/vm_llvm.o
+endif
+
 ifeq ($(PLATFORM),mingw32)
   Q3OBJ += \
     $(B)/client/win_resource.o \
@@ -1806,29 +2583,29 @@ Q3POBJ_SMP += \
 ifneq ($(USE_RENDERER_DLOPEN),0)
 $(B)/$(CLIENTBIN)$(FULLBINEXT): $(Q3OBJ) $(LIBSDLMAIN)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CLIENT_CFLAGS) $(CFLAGS) $(CLIENT_LDFLAGS) $(LDFLAGS) \
+	$(Q)$(LD) $(CLIENT_CFLAGS) $(CFLAGS) $(CLIENT_LDFLAGS) $(LDFLAGS) \
 		-o $@ $(Q3OBJ) \
 		$(LIBSDLMAIN) $(CLIENT_LIBS) $(LIBS)
 
 $(B)/renderer_opengl1_$(SHLIBNAME): $(Q3ROBJ) $(Q3POBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3ROBJ) $(Q3POBJ) \
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3ROBJ) $(Q3POBJ) \
 		$(THREAD_LIBS) $(LIBSDLMAIN) $(RENDERER_LIBS) $(LIBS)
 
 $(B)/renderer_opengl1_smp_$(SHLIBNAME): $(Q3ROBJ) $(Q3POBJ_SMP)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3ROBJ) $(Q3POBJ_SMP) \
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3ROBJ) $(Q3POBJ_SMP) \
 		$(THREAD_LIBS) $(LIBSDLMAIN) $(RENDERER_LIBS) $(LIBS)
 else
 $(B)/$(CLIENTBIN)$(FULLBINEXT): $(Q3OBJ) $(Q3ROBJ) $(Q3POBJ) $(LIBSDLMAIN)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CLIENT_CFLAGS) $(CFLAGS) $(CLIENT_LDFLAGS) $(LDFLAGS) \
+	$(Q)$(LD) $(CLIENT_CFLAGS) $(CFLAGS) $(CLIENT_LDFLAGS) $(LDFLAGS) \
 		-o $@ $(Q3OBJ) $(Q3ROBJ) $(Q3POBJ) \
 		$(LIBSDLMAIN) $(CLIENT_LIBS) $(RENDERER_LIBS) $(LIBS)
 
 $(B)/$(CLIENTBIN)-smp$(FULLBINEXT): $(Q3OBJ) $(Q3ROBJ) $(Q3POBJ_SMP) $(LIBSDLMAIN)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CLIENT_CFLAGS) $(CFLAGS) $(CLIENT_LDFLAGS) $(LDFLAGS) $(THREAD_LDFLAGS) \
+	$(Q)$(LD) $(CLIENT_CFLAGS) $(CFLAGS) $(CLIENT_LDFLAGS) $(LDFLAGS) $(THREAD_LDFLAGS) \
 		-o $@ $(Q3OBJ) $(Q3ROBJ) $(Q3POBJ_SMP) \
 		$(THREAD_LIBS) $(LIBSDLMAIN) $(CLIENT_LIBS) $(RENDERER_LIBS) $(LIBS)
 endif
@@ -2005,6 +2782,10 @@ ifeq ($(HAVE_VM_COMPILED),true)
   endif
 endif
 
+ifeq ($(USE_LLVM),1)
+  Q3DOBJ += $(B)/ded/vm_llvm.o
+endif
+
 ifeq ($(PLATFORM),mingw32)
   Q3DOBJ += \
     $(B)/ded/win_resource.o \
@@ -2023,7 +2804,7 @@ endif
 
 $(B)/$(SERVERBIN)$(FULLBINEXT): $(Q3DOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(Q3DOBJ) $(LIBS)
+	$(Q)$(LD) $(CFLAGS) $(LDFLAGS) -o $@ $(Q3DOBJ) $(LIBS)
 
 
 
@@ -2062,14 +2843,19 @@ Q3CGOBJ_ = \
 
 Q3CGOBJ = $(Q3CGOBJ_) $(B)/$(BASEGAME)/cgame/cg_syscalls.o
 Q3CGVMOBJ = $(Q3CGOBJ_:%.o=%.asm)
+Q3CGLLVMOBJ = $(Q3CGOBJ:%.o=%.llvmo)
 
 $(B)/$(BASEGAME)/cgame$(SHLIBNAME): $(Q3CGOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3CGOBJ)
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3CGOBJ)
 
 $(B)/$(BASEGAME)/vm/cgame.qvm: $(Q3CGVMOBJ) $(CGDIR)/cg_syscalls.asm $(Q3ASM)
 	$(echo_cmd) "Q3ASM $@"
 	$(Q)$(Q3ASM) -o $@ $(Q3CGVMOBJ) $(CGDIR)/cg_syscalls.asm
+
+$(B)/$(BASEGAME)/cgamellvm.bc: $(Q3CGLLVMOBJ) $(LLVMLINK)
+	$(echo_cmd) "LLVMLD $@"
+	$(Q)$(LLVMLD) $(LLVMLDFLAGS) -o $@ $(Q3CGLLVMOBJ)
 
 #############################################################################
 ## MISSIONPACK CGAME
@@ -2107,14 +2893,19 @@ MPCGOBJ_ = \
 
 MPCGOBJ = $(MPCGOBJ_) $(B)/$(MISSIONPACK)/cgame/cg_syscalls.o
 MPCGVMOBJ = $(MPCGOBJ_:%.o=%.asm)
+MPCGLLVMOBJ = $(MPCGOBJ:%.o=%.llvmo)
 
 $(B)/$(MISSIONPACK)/cgame$(SHLIBNAME): $(MPCGOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(MPCGOBJ)
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(MPCGOBJ)
 
 $(B)/$(MISSIONPACK)/vm/cgame.qvm: $(MPCGVMOBJ) $(CGDIR)/cg_syscalls.asm $(Q3ASM)
 	$(echo_cmd) "Q3ASM $@"
 	$(Q)$(Q3ASM) -o $@ $(MPCGVMOBJ) $(CGDIR)/cg_syscalls.asm
+
+$(B)/$(MISSIONPACK)/cgamellvm.bc: $(MPCGLLVMOBJ) $(LLVMLINK)
+	$(echo_cmd) "LLVMLD $@"
+	$(Q)$(LLVMLD) $(LLVMLDFLAGS) -o $@ $(MPCGLLVMOBJ)
 
 
 
@@ -2160,14 +2951,19 @@ Q3GOBJ_ = \
 
 Q3GOBJ = $(Q3GOBJ_) $(B)/$(BASEGAME)/game/g_syscalls.o
 Q3GVMOBJ = $(Q3GOBJ_:%.o=%.asm)
+Q3GLLVMOBJ = $(Q3GOBJ:%.o=%.llvmo)
 
 $(B)/$(BASEGAME)/qagame$(SHLIBNAME): $(Q3GOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3GOBJ)
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3GOBJ)
 
 $(B)/$(BASEGAME)/vm/qagame.qvm: $(Q3GVMOBJ) $(GDIR)/g_syscalls.asm $(Q3ASM)
 	$(echo_cmd) "Q3ASM $@"
 	$(Q)$(Q3ASM) -o $@ $(Q3GVMOBJ) $(GDIR)/g_syscalls.asm
+
+$(B)/$(BASEGAME)/qagamellvm.bc: $(Q3GLLVMOBJ) $(LLVMLINK)
+	$(echo_cmd) "LLVMLD $@"
+	$(Q)$(LLVMLD) $(LLVMLDFLAGS) -o $@ $(Q3GLLVMOBJ)
 
 #############################################################################
 ## MISSIONPACK GAME
@@ -2211,14 +3007,19 @@ MPGOBJ_ = \
 
 MPGOBJ = $(MPGOBJ_) $(B)/$(MISSIONPACK)/game/g_syscalls.o
 MPGVMOBJ = $(MPGOBJ_:%.o=%.asm)
+MPGLLVMOBJ = $(MPGOBJ:%.o=%.llvmo)
 
 $(B)/$(MISSIONPACK)/qagame$(SHLIBNAME): $(MPGOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(MPGOBJ)
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(MPGOBJ)
 
 $(B)/$(MISSIONPACK)/vm/qagame.qvm: $(MPGVMOBJ) $(GDIR)/g_syscalls.asm $(Q3ASM)
 	$(echo_cmd) "Q3ASM $@"
 	$(Q)$(Q3ASM) -o $@ $(MPGVMOBJ) $(GDIR)/g_syscalls.asm
+
+$(B)/$(MISSIONPACK)/qagamellvm.bc: $(MPGLLVMOBJ) $(LLVMLINK)
+	$(echo_cmd) "LLVMLD $@"
+	$(Q)$(LLVMLD) $(LLVMLDFLAGS) -o $@ $(MPGLLVMOBJ)
 
 
 
@@ -2276,14 +3077,19 @@ Q3UIOBJ_ = \
 
 Q3UIOBJ = $(Q3UIOBJ_) $(B)/$(MISSIONPACK)/ui/ui_syscalls.o
 Q3UIVMOBJ = $(Q3UIOBJ_:%.o=%.asm)
+Q3UILLVMOBJ = $(Q3UIOBJ:%.o=%.llvmo)
 
 $(B)/$(BASEGAME)/ui$(SHLIBNAME): $(Q3UIOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3UIOBJ)
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3UIOBJ)
 
 $(B)/$(BASEGAME)/vm/ui.qvm: $(Q3UIVMOBJ) $(UIDIR)/ui_syscalls.asm $(Q3ASM)
 	$(echo_cmd) "Q3ASM $@"
 	$(Q)$(Q3ASM) -o $@ $(Q3UIVMOBJ) $(UIDIR)/ui_syscalls.asm
+
+$(B)/$(BASEGAME)/uillvm.bc: $(Q3UILLVMOBJ) $(LLVMLINK)
+	$(echo_cmd) "LLVMLD $@"
+	$(Q)$(LLVMLD) $(LLVMLDFLAGS) -o $@ $(Q3UILLVMOBJ)
 
 #############################################################################
 ## MISSIONPACK UI
@@ -2304,15 +3110,19 @@ MPUIOBJ_ = \
 
 MPUIOBJ = $(MPUIOBJ_) $(B)/$(MISSIONPACK)/ui/ui_syscalls.o
 MPUIVMOBJ = $(MPUIOBJ_:%.o=%.asm)
+MPUILLVMOBJ = $(MPUIOBJ_:%.o=%.llvmo)
 
 $(B)/$(MISSIONPACK)/ui$(SHLIBNAME): $(MPUIOBJ)
 	$(echo_cmd) "LD $@"
-	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(MPUIOBJ)
+	$(Q)$(LD) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(MPUIOBJ)
 
 $(B)/$(MISSIONPACK)/vm/ui.qvm: $(MPUIVMOBJ) $(UIDIR)/ui_syscalls.asm $(Q3ASM)
 	$(echo_cmd) "Q3ASM $@"
 	$(Q)$(Q3ASM) -o $@ $(MPUIVMOBJ) $(UIDIR)/ui_syscalls.asm
 
+$(B)/$(MISSIONPACK)/uillvm.bc: $(MPUILLVMOBJ) $(LLVMLINK)
+	$(echo_cmd) "LLVMLD $@"
+	$(Q)$(LLVMLD) $(LLVMLDFLAGS) -o $@ $(MPUILLVMOBJ)
 
 
 #############################################################################
@@ -2358,6 +3168,9 @@ $(B)/client/%.o: $(SYSDIR)/%.m
 
 $(B)/client/%.o: $(SYSDIR)/%.rc
 	$(DO_WINDRES)
+
+$(B)/client/vm_llvm.o: $(CMDIR)/vm_llvm.cpp
+	$(DO_CXX)
 
 
 $(B)/renderer/%.o: $(CMDIR)/%.c
@@ -2463,6 +3276,9 @@ $(B)/ded/%.o: $(SYSDIR)/%.rc
 $(B)/ded/%.o: $(NDIR)/%.c
 	$(DO_DED_CC)
 
+$(B)/ded/vm_llvm.o: $(CMDIR)/vm_llvm.cpp
+	$(DO_DED_CXX)
+
 # Extra dependencies to ensure the SVN version is incorporated
 ifeq ($(USE_SVN),1)
   $(B)/client/cl_console.o : .svn/entries
@@ -2470,6 +3286,7 @@ ifeq ($(USE_SVN),1)
   $(B)/ded/common.o : .svn/entries
 endif
 
+$(CMDIR)/vm_llvm.c:
 
 #############################################################################
 ## GAME MODULE RULES
@@ -2487,6 +3304,12 @@ $(B)/$(BASEGAME)/cgame/bg_%.asm: $(GDIR)/bg_%.c $(Q3LCC)
 $(B)/$(BASEGAME)/cgame/%.asm: $(CGDIR)/%.c $(Q3LCC)
 	$(DO_CGAME_Q3LCC)
 
+$(B)/$(BASEGAME)/cgame/bg_%.llvmo: $(GDIR)/bg_%.c $(CLANG)
+	$(DO_CGAME_LLVMCC)
+
+$(B)/$(BASEGAME)/cgame/%.llvmo: $(CGDIR)/%.c $(CLANG)
+	$(DO_CGAME_LLVMCC)
+
 $(B)/$(MISSIONPACK)/cgame/bg_%.o: $(GDIR)/bg_%.c
 	$(DO_CGAME_CC_MISSIONPACK)
 
@@ -2499,6 +3322,12 @@ $(B)/$(MISSIONPACK)/cgame/bg_%.asm: $(GDIR)/bg_%.c $(Q3LCC)
 $(B)/$(MISSIONPACK)/cgame/%.asm: $(CGDIR)/%.c $(Q3LCC)
 	$(DO_CGAME_Q3LCC_MISSIONPACK)
 
+$(B)/$(MISSIONPACK)/cgame/bg_%.llvmo: $(GDIR)/bg_%.c $(CLANG)
+	$(DO_CGAME_LLVMCC_MISSIONPACK)
+
+$(B)/$(MISSIONPACK)/cgame/%.llvmo: $(CGDIR)/%.c $(CLANG)
+	$(DO_CGAME_LLVMCC_MISSIONPACK)
+
 
 $(B)/$(BASEGAME)/game/%.o: $(GDIR)/%.c
 	$(DO_GAME_CC)
@@ -2506,12 +3335,17 @@ $(B)/$(BASEGAME)/game/%.o: $(GDIR)/%.c
 $(B)/$(BASEGAME)/game/%.asm: $(GDIR)/%.c $(Q3LCC)
 	$(DO_GAME_Q3LCC)
 
+$(B)/$(BASEGAME)/game/%.llvmo: $(GDIR)/%.c $(CLANG)
+	$(DO_GAME_LLVMCC)
+
 $(B)/$(MISSIONPACK)/game/%.o: $(GDIR)/%.c
 	$(DO_GAME_CC_MISSIONPACK)
 
 $(B)/$(MISSIONPACK)/game/%.asm: $(GDIR)/%.c $(Q3LCC)
 	$(DO_GAME_Q3LCC_MISSIONPACK)
 
+$(B)/$(MISSIONPACK)/game/%.llvmo: $(GDIR)/%.c $(CLANG)
+	$(DO_GAME_LLVMCC_MISSIONPACK)
 
 $(B)/$(BASEGAME)/ui/bg_%.o: $(GDIR)/bg_%.c
 	$(DO_UI_CC)
@@ -2525,6 +3359,12 @@ $(B)/$(BASEGAME)/ui/bg_%.asm: $(GDIR)/bg_%.c $(Q3LCC)
 $(B)/$(BASEGAME)/ui/%.asm: $(Q3UIDIR)/%.c $(Q3LCC)
 	$(DO_UI_Q3LCC)
 
+$(B)/$(BASEGAME)/ui/bg_%.llvmo: $(GDIR)/bg_%.c $(CLANG)
+	$(DO_UI_LLVMCC)
+
+$(B)/$(BASEGAME)/ui/%.llvmo: $(Q3UIDIR)/%.c $(CLANG)
+	$(DO_UI_LLVMCC)
+
 $(B)/$(MISSIONPACK)/ui/bg_%.o: $(GDIR)/bg_%.c
 	$(DO_UI_CC_MISSIONPACK)
 
@@ -2537,6 +3377,12 @@ $(B)/$(MISSIONPACK)/ui/bg_%.asm: $(GDIR)/bg_%.c $(Q3LCC)
 $(B)/$(MISSIONPACK)/ui/%.asm: $(UIDIR)/%.c $(Q3LCC)
 	$(DO_UI_Q3LCC_MISSIONPACK)
 
+$(B)/$(MISSIONPACK)/ui/bg_%.llvmo: $(GDIR)/bg_%.c $(CLANG)
+	$(DO_UI_LLVMCC_MISSIONPACK)
+
+$(B)/$(MISSIONPACK)/ui/%.llvmo: $(UIDIR)/%.c $(CLANG)
+	$(DO_UI_LLVMCC_MISSIONPACK)
+
 
 $(B)/$(BASEGAME)/qcommon/%.o: $(CMDIR)/%.c
 	$(DO_SHLIB_CC)
@@ -2544,11 +3390,17 @@ $(B)/$(BASEGAME)/qcommon/%.o: $(CMDIR)/%.c
 $(B)/$(BASEGAME)/qcommon/%.asm: $(CMDIR)/%.c $(Q3LCC)
 	$(DO_Q3LCC)
 
+$(B)/$(BASEGAME)/qcommon/%.llvmo: $(CMDIR)/%.c $(CLANG)
+	$(DO_LLVMCC)
+
 $(B)/$(MISSIONPACK)/qcommon/%.o: $(CMDIR)/%.c
 	$(DO_SHLIB_CC_MISSIONPACK)
 
 $(B)/$(MISSIONPACK)/qcommon/%.asm: $(CMDIR)/%.c $(Q3LCC)
 	$(DO_Q3LCC_MISSIONPACK)
+
+$(B)/$(MISSIONPACK)/qcommon/%.llvmo: $(CMDIR)/%.c $(CLANG)
+	$(DO_LLVMCC_MISSIONPACK)
 
 
 #############################################################################
@@ -2557,8 +3409,9 @@ $(B)/$(MISSIONPACK)/qcommon/%.asm: $(CMDIR)/%.c $(Q3LCC)
 
 OBJ = $(Q3OBJ) $(Q3POBJ) $(Q3POBJ_SMP) $(Q3ROBJ) $(Q3DOBJ) \
   $(MPGOBJ) $(Q3GOBJ) $(Q3CGOBJ) $(MPCGOBJ) $(Q3UIOBJ) $(MPUIOBJ) \
-  $(MPGVMOBJ) $(Q3GVMOBJ) $(Q3CGVMOBJ) $(MPCGVMOBJ) $(Q3UIVMOBJ) $(MPUIVMOBJ)
-TOOLSOBJ = $(LBURGOBJ) $(Q3CPPOBJ) $(Q3RCCOBJ) $(Q3LCCOBJ) $(Q3ASMOBJ)
+  $(MPGVMOBJ) $(Q3GVMOBJ) $(Q3CGVMOBJ) $(MPCGVMOBJ) $(Q3UIVMOBJ) $(MPUIVMOBJ) \
+  $(MPGLLVMOBJ) $(Q3GLLVMOBJ) $(Q3CGLLVMOBJ) $(MPCGLLVMOBJ) $(Q3UILLVMOBJ) $(MPUILLVMOBJ)
+TOOLSOBJ = $(LBURGOBJ) $(Q3CPPOBJ) $(Q3RCCOBJ) $(Q3LCCOBJ) $(Q3ASMOBJ) $(CLANGOBJ) $(LLVMLINKOBJ)
 
 
 copyfiles: release
@@ -2643,7 +3496,7 @@ toolsclean2:
 	@echo "TOOLS_CLEAN $(B)"
 	@rm -f $(TOOLSOBJ)
 	@rm -f $(TOOLSOBJ_D_FILES)
-	@rm -f $(LBURG) $(DAGCHECK_C) $(Q3RCC) $(Q3CPP) $(Q3LCC) $(Q3ASM)
+	@rm -f $(LBURG) $(DAGCHECK_C) $(Q3RCC) $(Q3CPP) $(Q3LCC) $(Q3ASM) $(CLANG) $(LLVMLINK)
 
 distclean: clean toolsclean
 	@rm -rf $(BUILD_DIR)

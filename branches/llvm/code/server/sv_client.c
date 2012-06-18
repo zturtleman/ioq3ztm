@@ -1311,12 +1311,6 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 	//
 	if ( sv_pure->integer != 0 ) {
 
-		nChkSum1 = nChkSum2 = 0;
-		// we run the game, so determine which cgame and ui the client "should" be running
-		bGood = (FS_FileIsInPAK("vm/cgame.qvm", &nChkSum1) == 1);
-		if (bGood)
-			bGood = (FS_FileIsInPAK("vm/ui.qvm", &nChkSum2) == 1);
-
 		nClientPaks = Cmd_Argc();
 
 		// start at arg 2 ( skip serverId cl_paks )
@@ -1349,16 +1343,36 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 			}
 			// verify first to be the cgame checksum
 			pArg = Cmd_Argv(nCurArg++);
-			if (!pArg || *pArg == '@' || atoi(pArg) != nChkSum1 ) {
+			if (!pArg || *pArg == '@' ) {
 				bGood = qfalse;
 				break;
 			}
+			// we run the game, so determine which cgame the client "should" be running
+			nChkSum1 = atoi(pArg);
+			if (FS_FileIsInPAK("vm/cgame.qvm", &nChkSum2) != 1 || nChkSum2 != nChkSum1) {
+				// LLVM - if the client is not running QVM, it might still be running llvm.
+				if (FS_FileIsInPAK("cgamellvm.bc", &nChkSum2) != 1 || nChkSum2 != nChkSum1) {
+					bGood = qfalse;
+					break;
+				}
+			}
+
 			// verify the second to be the ui checksum
 			pArg = Cmd_Argv(nCurArg++);
-			if (!pArg || *pArg == '@' || atoi(pArg) != nChkSum2 ) {
+			if (!pArg || *pArg == '@') {
 				bGood = qfalse;
 				break;
 			}
+			// we run the game, so determine which ui the client "should" be running
+			nChkSum1 = atoi(pArg);
+			if (FS_FileIsInPAK("vm/ui.qvm", &nChkSum2) != 1 || nChkSum2 != nChkSum1) {
+				// LLVM - if the client is not running QVM, it might still be running llvm.
+				if (FS_FileIsInPAK("uillvm.bc", &nChkSum2) != 1 || nChkSum2 != nChkSum1) {
+					bGood = qfalse;
+					break;
+				}
+			}
+
 			// should be sitting at the delimeter now
 			pArg = Cmd_Argv(nCurArg++);
 			if (*pArg != '@') {

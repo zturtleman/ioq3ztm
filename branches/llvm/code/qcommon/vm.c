@@ -43,6 +43,10 @@ and one exported function: Perform
 
 #include "vm_local.h"
 
+#if USE_LLVM
+#include "vm_llvm.h"
+#endif
+
 
 vm_t	*currentVM = NULL;
 vm_t	*lastVM    = NULL;
@@ -557,6 +561,22 @@ vm_t *VM_Restart(vm_t *vm, qboolean unpure)
 		vm = VM_Create( name, systemCall, VMI_NATIVE );
 		return vm;
 	}
+#if USE_LLVM
+	// LLVM's can't be restarted in place, at least not for now
+	if ( vm->llvmModule ) {
+		char	name[MAX_QPATH];
+		intptr_t	(*systemCall)( intptr_t *parms );
+		
+		systemCall = vm->systemCall;	
+		Q_strncpyz( name, vm->name, sizeof( name ) );
+
+		VM_Free( vm );
+
+		vm = VM_Create( name, systemCall, VMI_COMPILED_LLVM );
+		return vm;
+	}
+#endif
+
 
 	// load the image
 	Com_Printf("VM_Restart()\n");
@@ -645,6 +665,23 @@ vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *),
 			// VM_Free overwrites the name on failed load
 			Q_strncpyz(vm->name, module, sizeof(vm->name));
 		}
+		else if(retval == VMI_COMPILED_LLVM)
+		{
+#if USE_LLVM
+			vm->searchPath = startSearch;
+			vm->llvmModule = VM_LoadLLVM(vm, VM_DllSyscall);
+			if ( vm->llvmModule )
+			{
+				Com_Printf( "Loaded llvm for %s!\n", vm->name );
+				vm->systemCall = systemCalls;
+				return vm;
+			}
+
+			Com_Printf( "Failed loading llvm, trying next\n" );
+#else
+			Com_Printf( "Loading llvm is not supported, trying next\n" );
+#endif
+		}
 	} while(retval >= 0);
 	
 	if(retval < 0)
@@ -721,6 +758,14 @@ void VM_Free( vm_t *vm ) {
 		Sys_UnloadDll( vm->dllHandle );
 		Com_Memset( vm, 0, sizeof( *vm ) );
 	}
+
+#if USE_LLVM
+	if (vm->llvmModule ) {
+		VM_UnloadLLVM( vm->llvmModule );
+		Com_Memset( vm, 0, sizeof( *vm ) );
+	}
+#endif
+
 #if 0	// now automatically freed by hunk
 	if ( vm->codeBase ) {
 		Z_Free( vm->codeBase );
@@ -997,6 +1042,14 @@ void VM_VmInfo_f( void ) {
 			Com_Printf( "native\n" );
 			continue;
 		}
+
+#if USE_LLVM
+		if ( vm->llvmModule ) {
+			Com_Printf( "llvm\n" );
+			continue;
+		}
+#endif
+
 		if ( vm->compiled ) {
 			Com_Printf( "compiled on load\n" );
 		} else {

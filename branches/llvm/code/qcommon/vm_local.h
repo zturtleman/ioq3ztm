@@ -157,6 +157,11 @@ struct vm_s {
 	intptr_t			(QDECL *entryPoint)( int callNum, ... );
 	void (*destroy)(vm_t* self);
 
+#if USE_LLVM
+	// for llvm modules
+	void		*llvmModule;
+#endif
+
 	// for interpreted modules
 	qboolean	currentlyInterpreting;
 

@@ -334,7 +334,8 @@ typedef struct vm_s vm_t;
 typedef enum {
 	VMI_NATIVE,
 	VMI_BYTECODE,
-	VMI_COMPILED
+	VMI_COMPILED,
+	VMI_COMPILED_LLVM
 } vmInterpret_t;
 
 typedef enum {
@@ -353,7 +354,7 @@ typedef enum {
 void	VM_Init( void );
 vm_t	*VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *), 
 				   vmInterpret_t interpret );
-// module should be bare: "cgame", not "cgame.dll" or "vm/cgame.qvm"
+// module should be bare: "cgame", not "cgame.dll", "vm/cgame.qvm" or "cgamellvm.bc"
 
 void	VM_Free( vm_t *vm );
 void	VM_Clear(void);
