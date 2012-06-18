@@ -384,15 +384,19 @@ static void SV_ClearServer(void) {
 ================
 SV_TouchCGame
 
-  touch the cgame.vm so that a pure client can load it if it's in a seperate pk3
+  touch cgame so that a pure client can load it if it's in a seperate pk3
 ================
 */
 static void SV_TouchCGame(void) {
 	fileHandle_t	f;
-	char filename[MAX_QPATH];
 
-	Com_sprintf( filename, sizeof(filename), "vm/%s.qvm", "cgame" );
-	FS_FOpenFileRead( filename, &f, qfalse );
+	FS_FOpenFileRead( "vm/cgame.qvm", &f, qfalse );
+	if ( f ) {
+		FS_FCloseFile( f );
+	}
+
+	// LLVM - even if the server doesn't use llvm itself, it should still add the references.
+	FS_FOpenFileRead( "cgamellvm.bc", &f, qfalse );
 	if ( f ) {
 		FS_FCloseFile( f );
 	}

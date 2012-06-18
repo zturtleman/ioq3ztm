@@ -1276,6 +1276,7 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 						   !FS_IsExt(filename, ".arena", len) &&
 						   !FS_IsExt(filename, ".menu", len) &&
 						   Q_stricmp(filename, "qagame.qvm") != 0 &&
+						   Q_stricmp(filename, "qagamellvm.bc") != 0 &&
 						   !strstr(filename, "levelshots"))
 						{
 							pak->referenced |= FS_GENERAL_REF;
@@ -1285,6 +1286,13 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 					if(strstr(filename, "cgame.qvm"))
 						pak->referenced |= FS_CGAME_REF;
 					if(strstr(filename, "ui.qvm"))
+						pak->referenced |= FS_UI_REF;
+
+					// LLVM - if we were asked to open an llvm, reference that.
+					// this assumes that we don't reference both, qvm AND llvm!
+					if(strstr(filename, "cgamellvm.bc"))
+						pak->referenced |= FS_CGAME_REF;
+					if(strstr(filename, "uillvm.bc"))
 						pak->referenced |= FS_UI_REF;
 
 					if(uniqueFILE)
@@ -1441,7 +1449,7 @@ vmInterpret_t FS_FindVM(void **startSearch, char *found, int foundlen, const cha
 	searchpath_t *search, *lastSearch;
 	directory_t *dir;
 	pack_t *pack;
-	char dllName[MAX_OSPATH], qvmName[MAX_OSPATH];
+	char dllName[MAX_OSPATH], qvmName[MAX_OSPATH], llvmName[MAX_OSPATH];
 	char *netpath;
 
 	if(!fs_searchpaths)
@@ -1451,6 +1459,7 @@ vmInterpret_t FS_FindVM(void **startSearch, char *found, int foundlen, const cha
 		Com_sprintf(dllName, sizeof(dllName), "%s" ARCH_STRING DLL_EXT, name);
 		
 	Com_sprintf(qvmName, sizeof(qvmName), "vm/%s.qvm", name);
+	Com_sprintf(llvmName, sizeof(llvmName), "%sllvm.bc", name);
 
 	lastSearch = *startSearch;
 	if(*startSearch == NULL)
@@ -1482,6 +1491,12 @@ vmInterpret_t FS_FindVM(void **startSearch, char *found, int foundlen, const cha
 				*startSearch = search;
 				return VMI_COMPILED;
 			}
+
+			if(FS_FOpenFileReadDir(llvmName, search, NULL, qfalse, qfalse) > 0)
+			{
+				*startSearch = search;
+				return VMI_COMPILED_LLVM;
+			}
 		}
 		else if(search->pack)
 		{
@@ -1504,6 +1519,12 @@ vmInterpret_t FS_FindVM(void **startSearch, char *found, int foundlen, const cha
 				*startSearch = search;
 
 				return VMI_COMPILED;
+			}
+
+			if(FS_FOpenFileReadDir(llvmName, search, NULL, qfalse, qfalse) > 0)
+			{
+				*startSearch = search;
+				return VMI_COMPILED_LLVM;
 			}
 		}
 		
