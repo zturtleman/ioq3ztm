@@ -26,11 +26,14 @@ NOTE: Foliage is currently not supported by Rend2.
 === lightmap ===
 NOTE: Currently not supported by Rend2. Added from WolfET.
 
-Usage: lightmap <string>
+Usage: lightmap < string >
 
-Example: lightmap path/to/image
-Example: lightmap $lightmap
-Example: lightmap $dlight
+  * Example: lightmap path/to/image
+    * Custom lightmap.
+  * Example: lightmap $dlight
+    * Uses image for dynamic lights.
+  * Example: lightmap $lightmap
+    * Uses lightmap set in map BSP.
 
 
 == Waveform Types ==
