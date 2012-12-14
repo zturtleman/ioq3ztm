@@ -6,9 +6,11 @@ If you're making a new game using Spearmint, these are some suggested changes yo
 == Engine ==
 If you're game isn't going to be a mod (only changing game, cgame, and ui), you should probably rebrand the engine.
 
-Open code/qcommon/q_shared.h
+  * Change settings in Makefile. (BASEGAME, VERSION, CLIENT, SERVER, etc)
+  * Change defines at the top of code/qcommon/q_shared.h
+  * Optionally add pk3 checksums at top of code/qcommon/files.c for proper pure support
 
-Near the top of the file is the following:
+In code/qcommon/q_shared.h, near the top of the file is the following:
 <code language="c">
   #define PRODUCT_NAME			"Spearmint"
   #define BASEGAME			"baseq3"
@@ -24,7 +26,7 @@ Near the top of the file is the following:
   #endif
 </code>
 
-BASEGAME is the default loaded mod.
+BASEGAME is the default loaded mod. You should probably keep it in sync with BASEGAME in Makefile.
 
 Changing GAMENAME_FOR_MASTER will make sure your game is separated from other games in the server browser.
 
