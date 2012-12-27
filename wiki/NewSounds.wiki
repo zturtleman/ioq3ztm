@@ -228,7 +228,7 @@ else
 In code/cgame/cg_local.h search for youHaveFlagSound and add last line below.
 <code language="c">
 	sfxHandle_t	youHaveFlagSound;
-	sfxhandle_t	playerHasFlagSound[MAX_SPLITVIEW];
+	sfxHandle_t	playerHasFlagSound[MAX_SPLITVIEW];
 </code>
 
 In code/cgame/cg_main.c again search for youHaveFlagSound and add the following lines before it (Note: cgs.media.youHaveFlagSound = ... code exists twice add this below each)
