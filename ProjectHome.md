@@ -1,0 +1,3 @@
+**Spearmint** (originally named ioq3ztm) is a fork of ioquake3 with fixes and features that don't fit in ioquake3 for one reason or another. It was created to be a better (or alternative) base engine for developing new standalone id Tech 3 games. Spearmint is not compatible with Quake III Arena mods (the QVM/DLL files) or demos. Spearmint can be used with the Quake III Arena data files (and optionally Quake III: Team Arena data files) or compatible replacement data.
+
+Note: **Spearmint development has moved to github** ( https://github.com/zturtleman/spearmint ) following ioquake3. The issue tracker is in the process of being moved.
